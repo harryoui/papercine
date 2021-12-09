@@ -3,14 +3,68 @@
 movie_dir="/Users/harryallen/Movies" # Where your movies are stored
 working_dir="/Users/harryallen/scripts/wallpaper" # Where the script is stored
 
-# "Battery Power" or "AC Power"
-charging_status=$(pmset -g ps | head -1 | cut -d\' -f2)
-if [ "${charging_status}" = "Battery Power" ]; then
-	echo "Battery is not charging; script will not run"
-	exit 0
+ignore_battery_status=true
+selection_method=''
+
+# Get params
+while getopts ":apf:" opt; do
+  case $opt in
+		a) # Active mode
+			echo Ignoring battery charging status \(active\)
+			ignore_battery_status=true
+			;;
+		p) # Passive mode
+			echo Respecting battery charging status \(passive\)
+			ignore_battery_status=false
+			;;
+    f)
+			if [ -f "$OPTARG" ]; then
+				movie="$OPTARG"
+				selection_method=user
+			fi
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      exit 1
+      ;;
+    :)
+      echo "Option -$OPTARG requires an argument." >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ "${ignore_battery_status}" = true ]
+then
+	charging_status="AC Power"
+else
+	# "Battery Power" or "AC Power"
+	charging_status=$(pmset -g ps | head -1 | cut -d\' -f2)
+	if [ "${charging_status}" = "Battery Power" ]; then
+		echo "Battery is not charging; script will not run"
+		exit 0
+	fi
 fi
 
-# Find the ideal image resolution based on screen's aspect ratio
+# Get movie file, from input or from directory
+if [ -z "$movie" ]; then
+	# a -f arg file wasn't given
+	if [ ! -f "$1" ]; then
+		# File wasn't given as positional arg 1 either
+		# Find statement only gets files in current directory level
+		# Edit below line to include more filetypes or locations within search
+		movie=$(find ${movie_dir} -maxdepth 1 -not -type d -name '*.mp4' -or -name '*.mkv' | sort -R | tail -n1)
+		selection_method=random
+	else
+		# A file was given as arg1
+		movie=$1
+		selection_method=user
+	fi
+fi
+
+echo Movie is $movie \("${selection_method}"\)
+
+# Find the ideal image resolution based on screens aspect ratio
 # Param: $1 = Wallpaper Image Path
 function calc_resolution() {
 	# Get System resolution e.g. '1920\n1080'
@@ -48,18 +102,6 @@ function calc_resolution() {
 	final_height=$(echo "$final_resolution" | tail -1)
 }
 
-if [ ! -f "$1" ]; then
-	# A file wasn't given
-	# Find statement only gets files in current directory level
-	# Edit below line to include more filetypes or locations within search
-	movie=$(find ${movie_dir} -maxdepth 1 -not -type d -name '*.mp4' -or -name '*.mkv' | sort -R | tail -n1)
-else
-	# A file was given
-	movie=$1
-fi
-
-echo $movie
-
 # Compatible movie prefixes, these can be adjusted but may not work well with FFmpeg
 suf="${movie##*.}"
 if [ "$suf" != "mp4" ] && [ "$suf" != "mkv" ] && [ "$suf" != "avi" ] && [ "$suf" != "mov" ]  && [ "$suf" != "gif" ] && [ "$suf" != "flv" ];then
@@ -71,7 +113,7 @@ timestamp=$(date +%s) # Seconds timestamp for unique filename
 
 basic_location=${working_dir}/wallpaper-${timestamp} # # e.g. wallpaper-1582614269 (no extension)
 location=${basic_location}.png # e.g. wallpaper-1582614269.png
-duration=$(ffmpeg -i "$movie" 2>&1 | grep Duration | awk '{print $2}' | tr -d ,)
+duration=$(ffmpeg -i "${movie}" 2>&1 | grep Duration | awk '{print $2}' | tr -d ,)
 seconds=$(echo "$duration" | awk -F: '{ print ($1 * 3600) + ($2 * 60) + $3 }') # Calculate duration into raw seconds
 seconds=${seconds%.*}
 
@@ -89,7 +131,7 @@ randpoint=$((1 + RANDOM % $seconds))
 echo Chosen timestamp: $randpoint
 
 # Remove old wallpaper files within the directory
-rm ${working_dir}/wallpaper-*.png 2>/dev/null 
+rm ${working_dir}/wallpaper-*.png 2>/dev/null
 
 echo Generating movie snapshot
 ffmpeg -ss "$randpoint" -i "$movie" -vframes 1 "$location" -y > /dev/null 2>&1
